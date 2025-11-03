@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adicionar Novo Livro</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Biblioteca</h1>
+    </header>
+    <main>
+        <h2>Adicionar Novo Livro</h2>
+
+        <form action="{{ url_for('criar') }}" method="post">
+            <label for="titulo">Título:</label>
+            <input type="text" id="titulo" name="titulo" required>
+
+            <label for="autor">Autor:</label>
+            <input type="text" id="autor" name="autor" required>
+
+            <label for="ano_publicacao">Ano de Publicação:</label>
+            <input type="number" id="ano_publicacao" name="ano_publicacao" required>
+
+            <button type="submit">Salvar</button>
+<a href="{{ url_for('index') }}">Cancelar</a>
+
+         </form>
+    </main>
+</body>
+</html>
