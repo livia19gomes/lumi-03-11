@@ -70,7 +70,27 @@ def cadastro_usuario():
     if not data:
         return jsonify({"error": "JSON vazio"}), 400
 
-    # campos básicos obrigatórios (tipo NÃO está aqui)
+    # Verifica autenticação (opcional para cadastro público de clientes)
+    token = request.headers.get('Authorization')
+
+    # Se tem token, valida quem está cadastrando
+    if token:
+        token = remover_bearer(token)
+        try:
+            payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+            id_usuario_logado = payload.get('id_usuario')
+
+            cur = con.cursor()
+            cur.execute("SELECT tipo FROM CADASTRO WHERE ID_CADASTRO = ?", (id_usuario_logado,))
+            result = cur.fetchone()
+            tipo_usuario_logado = result[0].lower() if result else None
+            cur.close()
+        except:
+            tipo_usuario_logado = None
+    else:
+        tipo_usuario_logado = None  # Cadastro público
+
+    # Campos básicos obrigatórios
     campos_basicos = ['nome', 'email', 'telefone', 'senha']
     faltando = [campo for campo in campos_basicos if not data.get(campo)]
     if faltando:
@@ -80,29 +100,54 @@ def cadastro_usuario():
     email = data['email']
     telefone = data['telefone']
     senha = data['senha']
-    tipo = data.get('tipo', 'usuario').lower()   # se não vier, assume "usuario"
+    tipo = data.get('tipo', 'usuario').lower()
     categoria = data.get('categoria')
 
-    if tipo == 'profissional' and not categoria:
-        return jsonify({"error": "Campo 'categoria' é obrigatório para profissionais"}), 400
+    # Regras de permissão para criar cada tipo de usuário
+    if tipo == 'adm':
+        # Apenas ADM pode criar outro ADM
+        if tipo_usuario_logado != 'adm':
+            return jsonify({"error": "Apenas administradores podem cadastrar outros administradores"}), 403
 
-    # se for adm ou usuario, categoria não é necessária
+    elif tipo == 'profissional':
+        # Apenas ADM pode criar profissional
+        if tipo_usuario_logado != 'adm':
+            return jsonify({"error": "Apenas administradores podem cadastrar profissionais"}), 403
+
+        if not categoria:
+            return jsonify({"error": "Campo 'categoria' é obrigatório para profissionais"}), 400
+
+    elif tipo == 'usuario':
+        # Qualquer um pode criar cliente (usuario):
+        # - Cadastro público (sem token)
+        # - ADM logado
+        # - PROFISSIONAL logado
+        # - Outro USUARIO logado (auto-cadastro)
+        categoria = None  # Clientes não têm categoria
+
+    else:
+        return jsonify({"error": "Tipo inválido. Use: 'usuario', 'profissional' ou 'adm'"}), 400
+
+    # Se for profissional ou adm, categoria não é necessária (exceto profissional)
     if tipo in ['adm', 'usuario']:
         categoria = None
 
+    # Validar senha
     senha_check = validar_senha(senha)
     if senha_check is not True:
         return senha_check
 
     cur = con.cursor()
 
-    cur.execute("SELECT 1 FROM cadastro WHERE email = ?", (email,))
+    # Verifica se o email já existe
+    cur.execute("SELECT 1 FROM CADASTRO WHERE email = ?", (email,))
     if cur.fetchone():
         cur.close()
-        return jsonify({"error": "Este usuário já foi cadastrado!"}), 400
+        return jsonify({"error": "Este email já está cadastrado!"}), 400
 
     senha_hashed = generate_password_hash(senha)
 
+    # Insere o novo usuário
     cur.execute(
         "INSERT INTO CADASTRO (NOME, EMAIL, TELEFONE, SENHA, CATEGORIA, TIPO, ATIVO) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (nome, email, telefone, senha_hashed, categoria, tipo, True)
@@ -118,32 +163,82 @@ def cadastro_usuario():
             'tipo': tipo,
             'categoria': categoria
         }
-    }), 200
+    }), 201
 
 @app.route('/cadastro', methods=['GET'])
 def listar_usuarios():
     try:
+        # Pega o token do usuário logado
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({"error": "Token de autenticação necessário"}), 401
+
+        token = remover_bearer(token)
+
+        try:
+            payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+            id_usuario = payload.get('id_usuario')
+        except:
+            return jsonify({"error": "Token inválido"}), 401
+
         cur = con.cursor()
 
-        tipo = request.args.get('tipo')
+        # Busca o tipo do usuário logado
+        cur.execute("SELECT tipo FROM CADASTRO WHERE ID_CADASTRO = ?", (id_usuario,))
+        result = cur.fetchone()
+        if not result:
+            cur.close()
+            return jsonify({"error": "Usuário não encontrado"}), 404
 
-        if tipo:
+        tipo_usuario = result[0].lower()
+
+        # Pega o filtro opcional por tipo (ex: ?tipo=profissional)
+        tipo_filtro = request.args.get('tipo')
+
+        if tipo_usuario == 'adm':
+            # ADM vê TODOS os usuários (com filtro opcional por tipo)
+            if tipo_filtro:
+                cur.execute("""
+                    SELECT id_cadastro, nome, email, telefone, tipo, categoria, ativo 
+                    FROM CADASTRO 
+                    WHERE tipo = ?
+                    ORDER BY nome
+                """, (tipo_filtro,))
+            else:
+                cur.execute("""
+                    SELECT id_cadastro, nome, email, telefone, tipo, categoria, ativo 
+                    FROM CADASTRO
+                    ORDER BY nome
+                """)
+
+        elif tipo_usuario == 'profissional':
+            # PROFISSIONAL vê apenas CLIENTES que fizeram agendamento COM ELE
             cur.execute("""
-                SELECT id_cadastro, nome, email, telefone, tipo, categoria, ativo 
-                FROM CADASTRO 
-                WHERE tipo = ?
-            """, (tipo,))
+                SELECT DISTINCT 
+                    C.ID_CADASTRO, 
+                    C.NOME, 
+                    C.EMAIL, 
+                    C.TELEFONE, 
+                    C.TIPO, 
+                    C.CATEGORIA, 
+                    C.ATIVO
+                FROM CADASTRO C
+                INNER JOIN AGENDA A ON A.ID_CLIENTE = C.ID_CADASTRO
+                WHERE A.ID_CADASTRO = ?
+                AND C.TIPO = 'usuario'
+                ORDER BY C.NOME
+            """, (id_usuario,))
+
         else:
-            cur.execute("""
-                SELECT id_cadastro, nome, email, telefone, tipo, categoria, ativo 
-                FROM CADASTRO
-            """)
+            # Clientes não têm acesso a listar usuários
+            cur.close()
+            return jsonify({"error": "Acesso negado. Apenas administradores e profissionais podem listar usuários"}), 403
 
         rows = cur.fetchall()
         cur.close()
 
         if not rows:
-            return jsonify({"message": "Nenhum usuário encontrado"}), 404
+            return jsonify({"message": "Nenhum usuário encontrado"}), 200
 
         usuarios = []
         for row in rows:
@@ -160,6 +255,8 @@ def listar_usuarios():
         return jsonify(usuarios), 200
 
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 @app.route('/cadastro/<int:id>', methods=['DELETE'])
@@ -537,7 +634,6 @@ def editar_servico(id_servico):
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-
 @app.route('/servico/<int:id_servico>', methods=['DELETE'])
 def deletar_servico(id_servico):
     try:
@@ -591,7 +687,6 @@ def deletar_servico(id_servico):
         print(traceback.format_exc())
         con.rollback()
         return jsonify({"error": str(e)}), 500
-
 
 @app.route('/horarios-disponiveis', methods=['GET'])
 def horarios_disponiveis():
