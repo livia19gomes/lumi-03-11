@@ -259,24 +259,6 @@ def listar_usuarios():
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
-@app.route('/cadastro/<int:id>', methods=['DELETE'])
-def deletar_Usuario(id):
-    cur = con.cursor()
-
-    cur.execute("SELECT 1 FROM cadastro WHERE id_cadastro = ?", (id,))
-    if not cur.fetchone():
-        cur.close()
-        return jsonify({"error": "Usuario não encontrado"}), 404
-
-    cur.execute("DELETE FROM cadastro WHERE id_cadastro = ?", (id,))
-    con.commit()
-    cur.close()
-
-    return jsonify({
-        'message': "Usuario excluído com sucesso!",
-        'id_cadastro': id
-    })
-
 @app.route('/cadastro/<int:id>', methods=['PUT'])
 def editar_usuario(id):
     cur = con.cursor()
@@ -686,83 +668,6 @@ def deletar_servico(id_servico):
         import traceback
         print(traceback.format_exc())
         con.rollback()
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/horarios-disponiveis', methods=['GET'])
-def horarios_disponiveis():
-    try:
-        data = request.args.get('data')  # formato: "2025-09-02"
-        id_profissional = request.args.get('id_profissional')
-        id_servico = request.args.get('id_servico')
-
-        if not data or not id_profissional or not id_servico:
-            return jsonify({"error": "Parâmetros obrigatórios: data, id_profissional, id_servico"}), 400
-
-        cur = con.cursor()
-
-        # Busca duração do serviço
-        cur.execute("SELECT DURACAO_HORAS FROM SERVICO WHERE ID_SERVICO = ?", (id_servico,))
-        result = cur.fetchone()
-        if not result:
-            cur.close()
-            return jsonify({"error": "Serviço não encontrado"}), 404
-
-        duracao_min = int(result[0]) if result[0] else 60
-
-        # Converte a data
-        try:
-            data_obj = datetime.strptime(data, "%Y-%m-%d")
-        except ValueError:
-            cur.close()
-            return jsonify({"error": "Formato de data inválido. Use YYYY-MM-DD"}), 400
-
-        # Gera horários possíveis (ex: das 8h às 18h, de hora em hora)
-        horarios_possiveis = []
-        for hora in range(8, 19):  # 8h até 18h
-            for minuto in [0, 30]:  # a cada 30 minutos
-                horario = data_obj.replace(hour=hora, minute=minuto, second=0)
-                if horario > datetime.now():  # Só horários futuros
-                    horarios_possiveis.append(horario)
-
-        # Busca agendamentos existentes do profissional neste dia
-        inicio_dia = data_obj.replace(hour=0, minute=0, second=0)
-        fim_dia = data_obj.replace(hour=23, minute=59, second=59)
-
-        cur.execute("""
-            SELECT A.DATA_HORA, S.DURACAO_HORAS
-            FROM AGENDA A
-            JOIN SERVICO S ON A.ID_SERVICO = S.ID_SERVICO
-            WHERE A.ID_CADASTRO = ? AND A.DATA_HORA BETWEEN ? AND ?
-        """, (id_profissional, inicio_dia, fim_dia))
-
-        agendamentos = cur.fetchall()
-        cur.close()
-
-        # Filtra horários disponíveis
-        horarios_disponiveis = []
-        for horario in horarios_possiveis:
-            fim_novo = horario + timedelta(minutes=duracao_min)
-            disponivel = True
-
-            for ag in agendamentos:
-                inicio_existente = ag[0]
-                duracao_existente = ag[1] if ag[1] else 60
-                fim_existente = inicio_existente + timedelta(minutes=int(duracao_existente))
-
-                # Verifica conflito
-                if (horario < fim_existente) and (fim_novo > inicio_existente):
-                    disponivel = False
-                    break
-
-            if disponivel:
-                horarios_disponiveis.append({
-                    "data_hora": horario.strftime("%Y-%m-%d %H:%M:%S"),
-                    "hora_formatada": horario.strftime("%H:%M")
-                })
-
-        return jsonify(horarios_disponiveis), 200
-
-    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/agenda', methods=['GET'])
@@ -1441,82 +1346,6 @@ def relatorio_clientes():
             "error": str(e),
             "detalhes": traceback.format_exc()
         }), 500
-
-@app.route('/usuario/perfil', methods=['GET'])
-def get_usuario_perfil():
-    token = request.headers.get('Authorization')
-
-    if not token:
-        return jsonify({"error": "Token de autenticação necessário"}), 401
-
-    token = remover_bearer(token)
-
-    try:
-        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-        id_usuario = payload.get('id_usuario')
-
-        cur = con.cursor()
-        cur.execute("""
-            SELECT id_cadastro, nome, email, telefone, tipo, categoria, ativo 
-            FROM CADASTRO 
-            WHERE id_cadastro = ?
-        """, (id_usuario,))
-
-        usuario = cur.fetchone()
-        cur.close()
-
-        if not usuario:
-            return jsonify({"error": "Usuário não encontrado"}), 404
-
-        return jsonify({
-            "id_cadastro": usuario[0],
-            "nome": usuario[1],
-            "email": usuario[2],
-            "telefone": usuario[3],
-            "tipo": usuario[4],
-            "categoria": usuario[5],
-            "ativo": bool(usuario[6])
-        }), 200
-
-    except jwt.ExpiredSignatureError:
-        return jsonify({"error": "Token expirado"}), 401
-    except jwt.InvalidTokenError:
-        return jsonify({"error": "Token inválido"}), 401
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Rota para listar apenas profissionais ativos
-@app.route('/profissionais', methods=['GET'])
-def listar_profissionais():
-    try:
-        cur = con.cursor()
-
-        # Busca apenas profissionais ativos
-        cur.execute("""
-            SELECT id_cadastro, nome, categoria 
-            FROM CADASTRO 
-            WHERE tipo = 'profissional' AND ativo = true
-            ORDER BY nome
-        """)
-
-        profissionais = cur.fetchall()
-        cur.close()
-
-        if not profissionais:
-            return jsonify({"message": "Nenhum profissional disponível"}), 404
-
-        lista = []
-        for prof in profissionais:
-            lista.append({
-                "id": prof[0],
-                "nome": prof[1],
-                "categoria": prof[2]
-            })
-
-        return jsonify(lista), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/agenda/criar', methods=['POST'])
 def criar_agendamento():
