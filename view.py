@@ -1455,6 +1455,27 @@ def listar_meus_agendamentos():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/agenda/<int:id_agenda>', methods=['DELETE'])
+def excluir_agendamento(id_agenda):
+    try:
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({"error": "Token de autenticação necessário"}), 401
+
+        token = remover_bearer(token)
+        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+        id_cliente = payload.get('id_usuario')
+
+        cur = con.cursor()
+        cur.execute("DELETE FROM AGENDA WHERE ID_AGENDA = ? AND ID_CLIENTE = ?", (id_agenda, id_cliente))
+        con.commit()
+        cur.close()
+
+        return jsonify({"success": True, "message": "Agendamento excluído"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/horarios-disponiveis', methods=['GET'])
 def horarios_disponiveis():
     try:
