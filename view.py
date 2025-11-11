@@ -399,7 +399,6 @@ def logout():
 
 codigos_temp = {}
 
-
 @app.route('/servico', methods=['POST'])
 def cadastrar_servico():
     try:
@@ -973,6 +972,7 @@ def painel_admin():
 
         cur.close()
 
+        hoje = date.today()
         return jsonify({
             'mensagem': "Painel Administrativo",
             'periodo': {
@@ -1420,4 +1420,3 @@ def criar_agendamento():
         import traceback
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
-
