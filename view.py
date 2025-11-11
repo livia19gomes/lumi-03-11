@@ -168,7 +168,6 @@ def cadastro_usuario():
 @app.route('/cadastro', methods=['GET'])
 def listar_usuarios():
     try:
-        # Pega o token do usuário logado
         token = request.headers.get('Authorization')
         if not token:
             return jsonify({"error": "Token de autenticação necessário"}), 401
@@ -183,8 +182,7 @@ def listar_usuarios():
 
         cur = con.cursor()
 
-        # Busca o tipo do usuário logado
-        cur.execute("SELECT tipo FROM CADASTRO WHERE ID_CADASTRO = ?", (id_usuario,))
+        cur.execute("SELECT TIPO FROM CADASTRO WHERE ID_CADASTRO = ?", (id_usuario,))
         result = cur.fetchone()
         if not result:
             cur.close()
@@ -192,45 +190,38 @@ def listar_usuarios():
 
         tipo_usuario = result[0].lower()
 
-        # Pega o filtro opcional por tipo (ex: ?tipo=profissional)
         tipo_filtro = request.args.get('tipo')
 
         if tipo_usuario == 'adm':
-            # ADM vê TODOS os usuários (com filtro opcional por tipo)
+            # ADM vê todos os usuários, exceto ele mesmo
             if tipo_filtro:
                 cur.execute("""
-                    SELECT id_cadastro, nome, email, telefone, tipo, categoria, ativo 
-                    FROM CADASTRO 
-                    WHERE tipo = ?
-                    ORDER BY nome
-                """, (tipo_filtro,))
+                    SELECT ID_CADASTRO, NOME, EMAIL, TELEFONE, TIPO, CATEGORIA, ATIVO
+                    FROM CADASTRO
+                    WHERE LOWER(TIPO) = LOWER(?)
+                    AND ID_CADASTRO <> ?
+                    ORDER BY NOME
+                """, (tipo_filtro, id_usuario))
             else:
                 cur.execute("""
-                    SELECT id_cadastro, nome, email, telefone, tipo, categoria, ativo 
+                    SELECT ID_CADASTRO, NOME, EMAIL, TELEFONE, TIPO, CATEGORIA, ATIVO
                     FROM CADASTRO
-                    ORDER BY nome
-                """)
+                    WHERE ID_CADASTRO <> ?
+                    ORDER BY NOME
+                """, (id_usuario,))
 
         elif tipo_usuario == 'profissional':
-            # PROFISSIONAL vê apenas CLIENTES que fizeram agendamento COM ELE
             cur.execute("""
                 SELECT DISTINCT 
-                    C.ID_CADASTRO, 
-                    C.NOME, 
-                    C.EMAIL, 
-                    C.TELEFONE, 
-                    C.TIPO, 
-                    C.CATEGORIA, 
-                    C.ATIVO
+                    C.ID_CADASTRO, C.NOME, C.EMAIL, C.TELEFONE, C.TIPO, C.CATEGORIA, C.ATIVO
                 FROM CADASTRO C
                 INNER JOIN AGENDA A ON A.ID_CLIENTE = C.ID_CADASTRO
                 WHERE A.ID_CADASTRO = ?
-                AND C.TIPO = 'usuario'
+                AND LOWER(C.TIPO) = 'usuario'
                 ORDER BY C.NOME
             """, (id_usuario,))
 
         else:
-            # Clientes não têm acesso a listar usuários
             cur.close()
             return jsonify({"error": "Acesso negado. Apenas administradores e profissionais podem listar usuários"}), 403
 
@@ -240,9 +231,8 @@ def listar_usuarios():
         if not rows:
             return jsonify({"message": "Nenhum usuário encontrado"}), 200
 
-        usuarios = []
-        for row in rows:
-            usuarios.append({
+        usuarios = [
+            {
                 "id": row[0],
                 "nome": row[1],
                 "email": row[2],
@@ -250,7 +240,9 @@ def listar_usuarios():
                 "tipo": row[4],
                 "categoria": row[5],
                 "ativo": bool(row[6])
-            })
+            }
+            for row in rows
+        ]
 
         return jsonify(usuarios), 200
 
